@@ -71,10 +71,12 @@ jobs:
       - name: Prepare libs directory
         run: mkdir -p app/libs
 
+      
       # ★ 核心改动：全工程只编译单 Go AAR (仅 core.aar)，杜绝双 Runtime 冗余！
       - name: Build core.aar
         working-directory: core-go
         run: |
+          go get golang.org/x/mobile/bind@latest
           go mod tidy
           go mod download
           gomobile bind \
