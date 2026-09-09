@@ -13,8 +13,8 @@ var (
 	globalLogCb     LogCallback
 	globalProtectFn ProtectFunc
 	globalRRIndex   uint64
-	currentSettings map[string]ProxySettings
-	currentRouting  []Rule
+	currentSettings map[string]proxySettings
+	currentRouting  []rule
 	listener        net.Listener
 )
 
@@ -56,17 +56,17 @@ func getProtectFunc() ProtectFunc {
 	return globalProtectFn
 }
 
-func getProxySettings(tag string) (ProxySettings, bool) {
+func getProxySettings(tag string) (proxySettings, bool) {
 	globalMutex.Lock()
 	defer globalMutex.Unlock()
 	if currentSettings == nil {
-		return ProxySettings{}, false
+		return proxySettings{}, false
 	}
 	s, ok := currentSettings[tag]
 	return s, ok
 }
 
-func getRoutingMap() []Rule {
+func getRoutingMap() []rule {
 	globalMutex.Lock()
 	defer globalMutex.Unlock()
 	return currentRouting
@@ -90,15 +90,15 @@ func Start(configJSON string) string {
 		return "already running"
 	}
 
-	var cfg Config
+	var cfg config
 	if err := json.Unmarshal([]byte(configJSON), &cfg); err != nil {
 		return "parse config failed: " + err.Error()
 	}
 
-	newSettings := make(map[string]ProxySettings)
+	newSettings := make(map[string]proxySettings)
 	for _, ob := range cfg.Outbounds {
 		if ob.Protocol == "ech-proxy" {
-			var ps ProxySettings
+			var ps proxySettings
 			if err := json.Unmarshal(ob.Settings, &ps); err == nil {
 				newSettings[ob.Tag] = ps
 				if ps.Rules != "" {

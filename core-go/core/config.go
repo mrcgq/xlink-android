@@ -1,4 +1,3 @@
-------------------------------------------------------------
 package core
 
 import (
@@ -7,36 +6,36 @@ import (
 	"strings"
 )
 
-type Config struct {
-	Inbounds  []Inbound  `json:"inbounds"`
-	Outbounds []Outbound `json:"outbounds"`
-	Routing   Routing    `json:"routing"`
+type config struct {
+	Inbounds  []inbound  `json:"inbounds"`
+	Outbounds []outbound `json:"outbounds"`
+	Routing   routing    `json:"routing"`
 }
 
-type Inbound struct {
+type inbound struct {
 	Tag      string `json:"tag"`
 	Listen   string `json:"listen"`
 	Protocol string `json:"protocol"`
 }
 
-type Outbound struct {
+type outbound struct {
 	Tag      string          `json:"tag"`
 	Protocol string          `json:"protocol"`
 	Settings json.RawMessage `json:"settings,omitempty"`
 }
 
-type Routing struct {
-	Rules           []Rule `json:"rules"`
+type routing struct {
+	Rules           []rule `json:"rules"`
 	DefaultOutbound string `json:"defaultOutbound,omitempty"`
 }
 
-type Rule struct {
+type rule struct {
 	Keyword string
 	Node    string
 }
 
-func parseRulesString(raw string) []Rule {
-	var rules []Rule
+func parseRulesString(raw string) []rule {
+	var rules []rule
 
 	raw = strings.ReplaceAll(raw, "|", "\n")
 	raw = strings.ReplaceAll(raw, ";", "\n")
@@ -54,7 +53,7 @@ func parseRulesString(raw string) []Rule {
 			keyword := strings.TrimSpace(parts[0])
 			node := strings.TrimRight(strings.TrimSpace(parts[1]), ";,.")
 			if keyword != "" && node != "" {
-				rules = append(rules, Rule{Keyword: keyword, Node: node})
+				rules = append(rules, rule{Keyword: keyword, Node: node})
 			}
 		}
 	}
@@ -119,7 +118,7 @@ func GenerateConfigJSON(
 		fallbackJSON = fmt.Sprintf(`, "fallback_addr": %s`, string(fbJSON))
 	}
 
-	config := fmt.Sprintf(
+	return fmt.Sprintf(
 		`{`+
 			`"inbounds": [{"tag": "socks-in", "listen": %s, "protocol": "socks"}],`+
 			`"outbounds": [{`+
@@ -140,8 +139,6 @@ func GenerateConfigJSON(
 		serverIPJSON,
 		fallbackJSON,
 	)
-
-	return config
 }
 
 func Version() string {

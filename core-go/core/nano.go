@@ -1,4 +1,3 @@
-------------------------------------------------------------
 package core
 
 import (
@@ -20,7 +19,7 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-type ProxySettings struct {
+type proxySettings struct {
 	Server       string   `json:"server"`
 	ServerPool   []string `json:"server_pool"`
 	Strategy     string   `json:"strategy"`
