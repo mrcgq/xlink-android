@@ -1,0 +1,9 @@
+------------------------------------------------------------
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 与 data_extraction_rules 保持一致策略 -->
+<full-backup-content>
+    <exclude domain="database" path="." />
+    <exclude domain="sharedpref" path="." />
+    <exclude domain="file" path="." />
+    <exclude domain="external" path="." />
+</full-backup-content>
