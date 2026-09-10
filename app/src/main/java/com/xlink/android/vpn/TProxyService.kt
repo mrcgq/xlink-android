@@ -1,4 +1,3 @@
-------------------------------------------------------------
 package com.xlink.android.vpn
 
 internal object TProxyService {

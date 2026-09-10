@@ -1,4 +1,3 @@
-------------------------------------------------------------
 package com.xlink.android.viewmodel
 
 import androidx.lifecycle.ViewModel

@@ -1,4 +1,3 @@
-------------------------------------------------------------
 package com.xlink.android.data.model
 
 import kotlinx.serialization.Serializable

@@ -1,4 +1,3 @@
-------------------------------------------------------------
 package com.xlink.android.ui.theme
 
 import android.os.Build

@@ -1,4 +1,3 @@
-------------------------------------------------------------
 //
 // C 版：写 HKCU\...\Run 注册表键
 // Android 版：通过 RECEIVE_BOOT_COMPLETED 广播 + BootReceiver 实现

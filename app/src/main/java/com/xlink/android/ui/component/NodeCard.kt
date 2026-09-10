@@ -1,4 +1,3 @@
-------------------------------------------------------------
 // 对应 C 版 hNodeListView 每行：别名列 + 状态列 + 右键操作菜单。
 
 package com.xlink.android.ui.component

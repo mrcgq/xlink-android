@@ -1,4 +1,3 @@
-------------------------------------------------------------
 // 在 HomeScreen（重命名、批量SNI）和 NodeEditScreen 中复用。
 
 package com.xlink.android.ui.component

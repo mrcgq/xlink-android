@@ -1,4 +1,3 @@
-------------------------------------------------------------
 // 仅声明插件，不应用到根项目
 plugins {
     alias(libs.plugins.android.application)  apply false

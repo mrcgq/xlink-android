@@ -1,4 +1,3 @@
-------------------------------------------------------------
 package com.xlink.android.receiver
 
 import android.content.BroadcastReceiver

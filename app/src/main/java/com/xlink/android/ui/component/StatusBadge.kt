@@ -1,4 +1,3 @@
-------------------------------------------------------------
 // 对应 C 版 RefreshNodeList() 中的 "●运行中" / "○已停止" 列文本。
 
 package com.xlink.android.ui.component

@@ -1,4 +1,3 @@
-------------------------------------------------------------
 package com.xlink.android.ui.component
 
 import androidx.compose.foundation.horizontalScroll

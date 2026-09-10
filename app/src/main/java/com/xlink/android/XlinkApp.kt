@@ -1,4 +1,3 @@
-------------------------------------------------------------
 // Android 8.0+ 强制要求：VPN 类 Foreground Service 必须在此注册通知 Channel，
 // 否则 startForeground() 会抛 BadNotificationException，系统直接杀进程。
 
