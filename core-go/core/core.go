@@ -78,8 +78,8 @@ func getRoutingMap() []rule {
 	return currentRouting
 }
 
-// emitLogSafe 在不持有锁的安全状态下发射日志，杜绝死锁
-func emitLogSafe(level, msg string) {
+// emitLog 确保在锁彻底释放后安全发射日志，两头兼顾且绝不死锁
+func emitLog(level, msg string) {
 	globalMutex.Lock()
 	cb := globalLogCb
 	tag := globalNodeTag
@@ -90,15 +90,20 @@ func emitLogSafe(level, msg string) {
 	}
 }
 
+// 兼容别名
+func emitLogSafe(level, msg string) {
+	emitLog(level, msg)
+}
+
 func Start(configJSON string) string {
 	listenAddr, errStr := startInternal(configJSON)
 	if errStr != "" {
-		emitLogSafe("ERROR", "内核启动失败: "+errStr)
+		emitLog("ERROR", "内核启动失败: "+errStr)
 		return errStr
 	}
 
-	// ★ 核心修复：在锁彻底释放之后再发射日志，彻底杜绝死锁卡死！
-	emitLogSafe("SYSTEM", "SOCKS5 引擎已成功监听: "+listenAddr)
+	// 锁在 startInternal 内部已经彻底释放，此处发射日志绝不死锁
+	emitLog("SYSTEM", "SOCKS5 引擎已成功监听: "+listenAddr)
 	return ""
 }
 
@@ -160,7 +165,7 @@ func handleIncoming(conn net.Conn) {
 	// 1. 协商 SOCKS5
 	target, err := handleSOCKS5(conn)
 	if err != nil {
-		emitLogSafe("ERROR", "SOCKS5 握手失败: "+err.Error())
+		emitLog("ERROR", "SOCKS5 握手失败: "+err.Error())
 		sendSocks5ErrorResponse(conn, 0x01)
 		return
 	}
@@ -168,7 +173,7 @@ func handleIncoming(conn net.Conn) {
 	// 2. 连接远程 Cloudflare Worker
 	wsConn, err := connectNanoTunnel(target, "proxy", nil)
 	if err != nil {
-		emitLogSafe("ERROR", "连接远程节点失败: "+err.Error())
+		emitLog("ERROR", "连接远程节点失败: "+err.Error())
 		sendSocks5ErrorResponse(conn, 0x04)
 		return
 	}
@@ -176,7 +181,7 @@ func handleIncoming(conn net.Conn) {
 
 	// 3. 回复 SOCKS5 成功响应包，彻底打通隧道
 	if err := sendSocks5SuccessResponse(conn); err != nil {
-		emitLogSafe("ERROR", "回复 SOCKS5 响应失败: "+err.Error())
+		emitLog("ERROR", "回复 SOCKS5 响应失败: "+err.Error())
 		return
 	}
 
@@ -198,6 +203,6 @@ func Stop() {
 	globalMutex.Unlock()
 
 	if stopped {
-		emitLogSafe("SYSTEM", "引擎已停止")
+		emitLog("SYSTEM", "引擎已停止")
 	}
 }
