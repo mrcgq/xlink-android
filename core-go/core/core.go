@@ -3,8 +3,14 @@ package core
 import (
 	"encoding/json"
 	"net"
+	"os"
 	"sync"
 )
+
+func init() {
+	// 强制纯 Go DNS 解析器，防止在手机上死锁
+	os.Setenv("GODEBUG", "netdns=go")
+}
 
 var (
 	globalMutex     sync.Mutex
@@ -137,19 +143,31 @@ func Start(configJSON string) string {
 
 func handleIncoming(conn net.Conn) {
 	defer conn.Close()
+
+	// 1. 协商 SOCKS5
 	target, err := handleSOCKS5(conn)
 	if err != nil {
 		emitLog("ERROR", "SOCKS5 握手失败: "+err.Error())
+		sendSocks5ErrorResponse(conn, 0x01)
 		return
 	}
 
+	// 2. 连接远程 Cloudflare Worker
 	wsConn, err := connectNanoTunnel(target, "proxy", nil)
 	if err != nil {
 		emitLog("ERROR", "连接远程节点失败: "+err.Error())
+		sendSocks5ErrorResponse(conn, 0x04)
 		return
 	}
 	defer wsConn.Close()
 
+	// 3. 发送成功响应，彻底打通链路！
+	if err := sendSocks5SuccessResponse(conn); err != nil {
+		emitLog("ERROR", "回复 SOCKS5 响应失败: "+err.Error())
+		return
+	}
+
+	// 4. 双向传输数据
 	pipeDirect(conn, wsConn)
 }
 

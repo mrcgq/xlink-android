@@ -50,8 +50,7 @@ func connectNanoTunnel(target string, outboundTag string, payload []byte) (*webs
 		if strings.Contains(target, rule.Keyword) {
 			targetServer = rule.Node
 			logLevel = "RULE"
-			logMsg = fmt.Sprintf("规则命中: %-20s → 节点: %s (关键词: %s)",
-				target, targetServer, rule.Keyword)
+			logMsg = fmt.Sprintf("规则命中: %-20s → 节点: %s (关键词: %s)", target, targetServer, rule.Keyword)
 			break
 		}
 	}
@@ -72,18 +71,17 @@ func connectNanoTunnel(target string, outboundTag string, payload []byte) (*webs
 				targetServer = settings.ServerPool[rand.Intn(int(poolLen))]
 			}
 			logLevel = "LB"
-			logMsg = fmt.Sprintf("负载均衡: %-25s → 节点: %s (策略: %s)",
-				target, targetServer, strategy)
+			logMsg = fmt.Sprintf("负载均衡: %-25s → 节点: %s (策略: %s)", target, targetServer, strategy)
 		} else {
 			targetServer = settings.Server
 			logLevel = "DIRECT"
-			logMsg = fmt.Sprintf("直连访问: %-25s → 节点: %s",
-				target, targetServer)
+			logMsg = fmt.Sprintf("直连访问: %-25s → 节点: %s", target, targetServer)
 		}
 	}
 
 	emitLog(logLevel, logMsg)
 
+	// 传入指定 IP 和回源 IP
 	wsConn, err := dialCleanWebSocket(targetServer, settings.ServerIP, fallback, secretKey)
 	if err != nil {
 		return nil, err
@@ -117,63 +115,65 @@ func makePreDialControl() func(network, address string, c syscall.RawConn) error
 }
 
 func dialCleanWebSocket(serverAddr, serverIP, fallbackAddr, token string) (*websocket.Conn, error) {
+	var sniHost string
+	var realIP string
+	var realPort string
+
+	cleanServerIP := strings.TrimSpace(serverIP)
+
 	parts := strings.SplitN(serverAddr, "#", 2)
 	if len(parts) == 2 {
 		sni := strings.TrimSpace(parts[0])
 		realAddr := strings.TrimSpace(parts[1])
 
-		sniHost, sniPort, err := net.SplitHostPort(sni)
+		sh, sp, err := net.SplitHostPort(sni)
 		if err != nil {
 			sniHost = sni
-			sniPort = "443"
+			realPort = "443"
+		} else {
+			sniHost = sh
+			realPort = sp
 		}
 
-		realIP, realPort, err := net.SplitHostPort(realAddr)
-		if err != nil {
-			realIP = realAddr
-			realPort = sniPort
-		}
-
-		wsURL := buildWsURL(sniHost, realPort, token, fallbackAddr)
-		reqHeader := http.Header{}
-		reqHeader.Add("Host", sniHost)
-		reqHeader.Add("User-Agent", "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36")
-		reqHeader.Add("Authorization", "Bearer "+token)
-
-		netDialer := &net.Dialer{
-			Timeout: 8 * time.Second,
-			Control: makePreDialControl(),
-		}
-
-		dialer := websocket.Dialer{
-			TLSClientConfig:  &tls.Config{InsecureSkipVerify: true, ServerName: sniHost},
-			HandshakeTimeout: 10 * time.Second,
-			NetDial: func(network, addr string) (net.Conn, error) {
-				return netDialer.Dial(network, net.JoinHostPort(realIP, realPort))
-			},
-		}
-
-		conn, resp, err := dialer.Dial(wsURL, reqHeader)
-		if err != nil {
-			if resp != nil {
-				return nil, fmt.Errorf("HTTP %d", resp.StatusCode)
+		if cleanServerIP != "" {
+			realIP = cleanServerIP
+		} else {
+			rh, rp, err := net.SplitHostPort(realAddr)
+			if err != nil {
+				realIP = realAddr
+			} else {
+				realIP = rh
+				realPort = rp
 			}
-			return nil, err
 		}
-		return conn, nil
+	} else {
+		host, port, _, _ := parseServerAddr(serverAddr)
+		sniHost = host
+		realPort = port
+		if cleanServerIP != "" {
+			realIP = cleanServerIP
+		} else {
+			realIP = host
+		}
 	}
 
-	host, port, path, _ := parseServerAddr(serverAddr)
+	// 智能兼容指定 IP 里带端口的情况 (如 104.16.1.1:443)
+	if strings.Contains(realIP, ":") && !strings.HasPrefix(realIP, "[") {
+		if strings.Count(realIP, ":") == 1 {
+			h, p, err := net.SplitHostPort(realIP)
+			if err == nil {
+				realIP = h
+				realPort = p
+			}
+		}
+	}
 
-	tlsHost := host
+	tlsHost := sniHost
 	if strings.HasPrefix(tlsHost, "[") && strings.HasSuffix(tlsHost, "]") {
 		tlsHost = tlsHost[1 : len(tlsHost)-1]
 	}
-	if strings.Contains(host, ":") && !strings.HasPrefix(host, "[") {
-		host = "[" + host + "]"
-	}
 
-	wsURL := buildWsURL(host+path, port, token, fallbackAddr)
+	wsURL := buildWsURL(sniHost, realPort, token, fallbackAddr)
 	reqHeader := http.Header{}
 	reqHeader.Add("Host", tlsHost)
 	reqHeader.Add("User-Agent", "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36")
@@ -188,19 +188,14 @@ func dialCleanWebSocket(serverAddr, serverIP, fallbackAddr, token string) (*webs
 		TLSClientConfig:  &tls.Config{InsecureSkipVerify: true, ServerName: tlsHost},
 		HandshakeTimeout: 10 * time.Second,
 		NetDial: func(network, addr string) (net.Conn, error) {
-			dialAddr := addr
-			if serverIP != "" {
-				_, p, _ := net.SplitHostPort(addr)
-				dialAddr = net.JoinHostPort(serverIP, p)
-			}
-			return netDialer.Dial(network, dialAddr)
+			return netDialer.Dial(network, net.JoinHostPort(realIP, realPort))
 		},
 	}
 
 	conn, resp, err := dialer.Dial(wsURL, reqHeader)
 	if err != nil {
 		if resp != nil {
-			return nil, fmt.Errorf("HTTP %d", resp.StatusCode)
+			return nil, fmt.Errorf("HTTP %d (Worker 鉴权失败或拒绝)", resp.StatusCode)
 		}
 		return nil, err
 	}
@@ -250,8 +245,7 @@ func buildWsURL(hostWithPath, port, token, fallbackAddr string) string {
 		path = hostWithPath[idx:]
 		host = hostWithPath[:idx]
 	}
-	base := fmt.Sprintf("wss://%s:%s%s?token=%s",
-		host, port, path, url.QueryEscape(token))
+	base := fmt.Sprintf("wss://%s:%s%s?token=%s", host, port, path, url.QueryEscape(token))
 	if fallbackAddr != "" {
 		base += "&pyip=" + url.QueryEscape(fallbackAddr)
 	}

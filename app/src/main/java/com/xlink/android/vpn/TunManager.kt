@@ -1,5 +1,3 @@
-
-
 package com.xlink.android.vpn
 
 import android.content.Context
@@ -76,6 +74,7 @@ class TunManager(private val context: Context) {
         val configFile = File(context.cacheDir, "tproxy.conf")
         if (configFile.exists()) configFile.delete()
 
+        // 使用合法的 FakeIP 地址池: 198.18.1.0/16，彻底修复安卓无法解析域名的问题
         val configYaml = """
             misc:
               task-stack-size: 81920
@@ -89,8 +88,8 @@ class TunManager(private val context: Context) {
             mapdns:
               address: 198.18.0.2
               port: 53
-              network: 240.0.0.0
-              netmask: 240.0.0.0
+              network: 198.18.1.0
+              netmask: 255.255.0.0
               cache-size: 10000
         """.trimIndent()
 

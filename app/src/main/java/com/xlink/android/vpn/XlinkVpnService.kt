@@ -1,5 +1,3 @@
-
-
 package com.xlink.android.vpn
 
 import android.app.Notification
@@ -15,7 +13,6 @@ import android.os.ParcelFileDescriptor
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import com.xlink.android.R
-import com.xlink.android.data.model.NodeConfig
 import com.xlink.android.data.store.NodeStore
 import com.xlink.android.engine.CoreEngine
 import com.xlink.android.ui.MainActivity
@@ -38,13 +35,12 @@ class XlinkVpnService : VpnService() {
         const val ACTION_START_ALL = "com.xlink.android.START_ALL"
         const val ACTION_STOP_ALL = "com.xlink.android.STOP_ALL"
         const val EXTRA_NODE_ID = "node_id"
-        const val EXTRA_AUTO_START = "auto_start"
 
         const val NOTIFICATION_CHANNEL_ID = "xlink_vpn_channel"
         const val NOTIFICATION_ID = 1001
 
         private const val TUN_ADDRESS_V4 = "198.18.0.1"
-        private const val TUN_PREFIX_V4 = 32
+        private const val TUN_PREFIX_V4 = 16
         private const val TUN_ADDRESS_V6 = "fc00::1"
         private const val TUN_PREFIX_V6 = 128
         private const val TUN_MTU = 1500
@@ -147,16 +143,9 @@ class XlinkVpnService : VpnService() {
             VpnStateHolder.setStarting(nodeId, node.name)
 
             try {
-                val socksPort: Int
-                val listenAddr: String
-                if (node.routingMode == 1) {
-                    socksPort = PortFinder.findFree()
-                    listenAddr = "127.0.0.1:$socksPort"
-                } else {
-                    val (_, p) = NodeConfig.parseListenAddr(node.listen)
-                    socksPort = p
-                    listenAddr = node.listen
-                }
+                // 动态分配可用端口，避免端口占用冲突
+                val socksPort = PortFinder.findFree(10808)
+                val listenAddr = "127.0.0.1:$socksPort"
 
                 val coreResult = CoreEngine.startNode(node, listenAddr)
                 if (coreResult.isFailure) {
@@ -210,6 +199,7 @@ class XlinkVpnService : VpnService() {
                 .addAddress(TUN_ADDRESS_V4, TUN_PREFIX_V4)
                 .addRoute("0.0.0.0", 0)
                 .addDnsServer(TUN_FAKEDNS_IP)
+                .addRoute("198.18.0.0", 15)
                 .addAddress(TUN_ADDRESS_V6, TUN_PREFIX_V6)
                 .addRoute("::", 0)
                 .setMtu(TUN_MTU)
