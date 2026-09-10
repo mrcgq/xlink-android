@@ -1,8 +1,3 @@
-//
-// 终审修复重点：
-//   · 采用精准的 while (seenSignatures.size > MAX_LOG_LINES) 单步 FIFO 淘汰，
-//     彻底杜绝 ConcurrentModificationException 与内存无界泄漏风险。
-
 package com.xlink.android.viewmodel
 
 import androidx.lifecycle.ViewModel
@@ -10,6 +5,7 @@ import androidx.lifecycle.viewModelScope
 import com.xlink.android.engine.CoreEngine
 import com.xlink.android.engine.LogEntry
 import com.xlink.android.engine.LogLevel
+import com.xlink.android.vpn.VpnStateHolder
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -18,6 +14,9 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 class LogViewModel : ViewModel() {
 
@@ -50,8 +49,23 @@ class LogViewModel : ViewModel() {
     }.stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
 
     init {
+        // 收集内核日志
         viewModelScope.launch(Dispatchers.Main) {
             CoreEngine.logFlow.collect { entry -> appendEntry(entry) }
+        }
+
+        // 同时收集 VPN 网卡与系统生命周期日志
+        viewModelScope.launch(Dispatchers.Main) {
+            VpnStateHolder.logEvents.collect { vpnEvent ->
+                val lvl = when (vpnEvent.level) {
+                    com.xlink.android.vpn.LogLevel.ERROR -> LogLevel.FAILURE
+                    com.xlink.android.vpn.LogLevel.WARNING -> LogLevel.WARN
+                    com.xlink.android.vpn.LogLevel.SUCCESS -> LogLevel.SUCCESS
+                    else -> LogLevel.SYSTEM
+                }
+                val timeStr = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date(vpnEvent.timestampMs))
+                appendEntry(LogEntry(timeStr, vpnEvent.nodeName, lvl, vpnEvent.message))
+            }
         }
     }
 

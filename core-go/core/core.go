@@ -8,7 +8,7 @@ import (
 )
 
 func init() {
-	// 强制纯 Go DNS 解析器，防止在手机上死锁
+	// 强制纯 Go DNS 解析器，规避 Android CGO 死循环
 	os.Setenv("GODEBUG", "netdns=go")
 }
 
@@ -78,27 +78,41 @@ func getRoutingMap() []rule {
 	return currentRouting
 }
 
-func emitLog(level, msg string) {
+// emitLogSafe 在不持有锁的安全状态下发射日志，杜绝死锁
+func emitLogSafe(level, msg string) {
 	globalMutex.Lock()
 	cb := globalLogCb
 	tag := globalNodeTag
 	globalMutex.Unlock()
+
 	if cb != nil {
 		cb.OnLog(level, tag, msg)
 	}
 }
 
 func Start(configJSON string) string {
+	listenAddr, errStr := startInternal(configJSON)
+	if errStr != "" {
+		emitLogSafe("ERROR", "内核启动失败: "+errStr)
+		return errStr
+	}
+
+	// ★ 核心修复：在锁彻底释放之后再发射日志，彻底杜绝死锁卡死！
+	emitLogSafe("SYSTEM", "SOCKS5 引擎已成功监听: "+listenAddr)
+	return ""
+}
+
+func startInternal(configJSON string) (string, string) {
 	globalMutex.Lock()
 	defer globalMutex.Unlock()
 
 	if globalRunning {
-		return "already running"
+		return "", "already running"
 	}
 
 	var cfg config
 	if err := json.Unmarshal([]byte(configJSON), &cfg); err != nil {
-		return "parse config failed: " + err.Error()
+		return "", "parse config failed: " + err.Error()
 	}
 
 	newSettings := make(map[string]proxySettings)
@@ -122,7 +136,7 @@ func Start(configJSON string) string {
 
 	l, err := net.Listen("tcp", listenAddr)
 	if err != nil {
-		return "listen failed: " + err.Error()
+		return "", "listen failed: " + err.Error()
 	}
 	listener = l
 	globalRunning = true
@@ -137,8 +151,7 @@ func Start(configJSON string) string {
 		}
 	}()
 
-	emitLog("SYSTEM", "SOCKS5 引擎已成功监听: "+listenAddr)
-	return ""
+	return listenAddr, ""
 }
 
 func handleIncoming(conn net.Conn) {
@@ -147,7 +160,7 @@ func handleIncoming(conn net.Conn) {
 	// 1. 协商 SOCKS5
 	target, err := handleSOCKS5(conn)
 	if err != nil {
-		emitLog("ERROR", "SOCKS5 握手失败: "+err.Error())
+		emitLogSafe("ERROR", "SOCKS5 握手失败: "+err.Error())
 		sendSocks5ErrorResponse(conn, 0x01)
 		return
 	}
@@ -155,15 +168,15 @@ func handleIncoming(conn net.Conn) {
 	// 2. 连接远程 Cloudflare Worker
 	wsConn, err := connectNanoTunnel(target, "proxy", nil)
 	if err != nil {
-		emitLog("ERROR", "连接远程节点失败: "+err.Error())
+		emitLogSafe("ERROR", "连接远程节点失败: "+err.Error())
 		sendSocks5ErrorResponse(conn, 0x04)
 		return
 	}
 	defer wsConn.Close()
 
-	// 3. 发送成功响应，彻底打通链路！
+	// 3. 回复 SOCKS5 成功响应包，彻底打通隧道
 	if err := sendSocks5SuccessResponse(conn); err != nil {
-		emitLog("ERROR", "回复 SOCKS5 响应失败: "+err.Error())
+		emitLogSafe("ERROR", "回复 SOCKS5 响应失败: "+err.Error())
 		return
 	}
 
@@ -172,16 +185,19 @@ func handleIncoming(conn net.Conn) {
 }
 
 func Stop() {
+	stopped := false
 	globalMutex.Lock()
-	defer globalMutex.Unlock()
+	if globalRunning {
+		globalRunning = false
+		if listener != nil {
+			listener.Close()
+			listener = nil
+		}
+		stopped = true
+	}
+	globalMutex.Unlock()
 
-	if !globalRunning {
-		return
+	if stopped {
+		emitLogSafe("SYSTEM", "引擎已停止")
 	}
-	globalRunning = false
-	if listener != nil {
-		listener.Close()
-		listener = nil
-	}
-	emitLog("SYSTEM", "引擎已停止")
 }

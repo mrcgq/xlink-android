@@ -13,6 +13,7 @@ import android.os.ParcelFileDescriptor
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import com.xlink.android.R
+import com.xlink.android.data.model.NodeConfig
 import com.xlink.android.data.store.NodeStore
 import com.xlink.android.engine.CoreEngine
 import com.xlink.android.ui.MainActivity
@@ -143,9 +144,10 @@ class XlinkVpnService : VpnService() {
             VpnStateHolder.setStarting(nodeId, node.name)
 
             try {
-                // 动态分配可用端口，避免端口占用冲突
-                val socksPort = PortFinder.findFree(10808)
-                val listenAddr = "127.0.0.1:$socksPort"
+                // ★ 核心修复：精准解析用户在界面配置的监听地址和端口（如 127.0.0.1:20808）
+                val (configuredHost, configuredPort) = NodeConfig.parseListenAddr(node.listen)
+                val socksPort = PortFinder.findFree(configuredPort)
+                val listenAddr = "$configuredHost:$socksPort"
 
                 val coreResult = CoreEngine.startNode(node, listenAddr)
                 if (coreResult.isFailure) {
