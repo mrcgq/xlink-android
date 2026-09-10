@@ -39,28 +39,19 @@ android {
     }
 
     signingConfigs {
-        getByName("debug") {
-            storeFile = file("${System.getProperty("user.home")}/.android/debug.keystore")
-            storePassword = "android"
-            keyAlias = "androiddebugkey"
-            keyPassword = "android"
-        }
         create("release") {
             val keystorePath = System.getenv("KEYSTORE_PATH")
             val keystorePass = System.getenv("KEYSTORE_PASSWORD")
             val keyAliasVal = System.getenv("KEY_ALIAS")
             val keyPassVal = System.getenv("KEY_PASSWORD")
 
-            if (keystorePath != null && keystorePass != null && keyAliasVal != null && keyPassVal != null) {
+            if (keystorePath != null && keystorePass != null && keyAliasVal != null && keyPassVal != null && file(keystorePath).exists()) {
                 storeFile = file(keystorePath)
                 storePassword = keystorePass
                 keyAlias = keyAliasVal
                 keyPassword = keyPassVal
             } else {
-                storeFile = file("${System.getProperty("user.home")}/.android/debug.keystore")
-                storePassword = "android"
-                keyAlias = "androiddebugkey"
-                keyPassword = "android"
+                initWith(signingConfigs.getByName("debug"))
             }
         }
     }

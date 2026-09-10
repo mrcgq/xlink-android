@@ -126,6 +126,13 @@ jobs:
           if [ -z "${{ secrets.KEYSTORE_PATH }}" ] && [ -z "$KEYSTORE_PATH" ]; then
             echo "::warning title=Keystore Warning::未检测到 KEYSTORE_PATH 环境变量！Release APK 将使用本地 Debug 密钥兜底签名。"
           fi
+          
+      - name: Ensure Debug Keystore exists
+        run: |
+          mkdir -p ~/.android
+          if [ ! -f ~/.android/debug.keystore ]; then
+            keytool -genkey -v -keystore ~/.android/debug.keystore -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Android,C=US"
+          fi
 
       # Gradle 会自动通过 ndkBuild 编译 C 源码生成 libhev-socks5-tunnel.so 并打包
       - name: Build Debug APK

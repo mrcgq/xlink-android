@@ -28,7 +28,7 @@ import java.util.concurrent.ConcurrentHashMap
 
 enum class VpnState { STOPPED, STARTING, RUNNING, ERROR }
 
-internal data class EngineHandle(
+data class EngineHandle(
     val nodeId: String,
     val coreInstanceId: Long = 0L,
     val tunStarted: Boolean = false,
