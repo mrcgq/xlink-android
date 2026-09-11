@@ -17,6 +17,7 @@ import com.xlink.android.data.model.NodeConfig
 import com.xlink.android.data.store.NodeStore
 import com.xlink.android.engine.CoreEngine
 import com.xlink.android.ui.MainActivity
+import com.xlink.android.util.AppFilterManager
 import com.xlink.android.util.PortFinder
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -196,18 +197,29 @@ class XlinkVpnService : VpnService() {
 
     private fun establishTun(): ParcelFileDescriptor? {
         return try {
-            Builder()
+            val builder = Builder()
                 .addAddress(TUN_ADDRESS_V4, TUN_PREFIX_V4)
                 .addRoute("0.0.0.0", 0)
                 .addDnsServer(TUN_FAKEDNS_IP)
-                .addRoute("100.64.0.0", 10) // 确保全部 CGNAT FakeIP 流量无缝路由进 TUN 网卡
+                .addRoute("100.64.0.0", 10)
                 .addAddress(TUN_ADDRESS_V6, TUN_PREFIX_V6)
                 .addRoute("::", 0)
                 .setMtu(TUN_MTU)
                 .setBlocking(false)
                 .setSession("Xlink Odyssey")
                 .addDisallowedApplication(packageName)
-                .establish()
+
+            // 分应用代理控制
+            if (AppFilterManager.isEnabled(applicationContext)) {
+                val selectedApps = AppFilterManager.getSelectedApps(applicationContext)
+                if (selectedApps.isNotEmpty()) {
+                    for (pkg in selectedApps) {
+                        try { builder.addAllowedApplication(pkg) } catch (_: Exception) {}
+                    }
+                }
+            }
+
+            builder.establish()
         } catch (e: Exception) {
             Log.e(TAG, "establishTun 失败: ${e.message}", e)
             null
