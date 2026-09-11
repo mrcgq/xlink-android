@@ -144,7 +144,6 @@ class XlinkVpnService : VpnService() {
             VpnStateHolder.setStarting(nodeId, node.name)
 
             try {
-                // ★ 核心修复：精准解析用户在界面配置的监听地址和端口（如 127.0.0.1:20808）
                 val (configuredHost, configuredPort) = NodeConfig.parseListenAddr(node.listen)
                 val socksPort = PortFinder.findFree(configuredPort)
                 val listenAddr = "$configuredHost:$socksPort"
@@ -201,7 +200,7 @@ class XlinkVpnService : VpnService() {
                 .addAddress(TUN_ADDRESS_V4, TUN_PREFIX_V4)
                 .addRoute("0.0.0.0", 0)
                 .addDnsServer(TUN_FAKEDNS_IP)
-                .addRoute("198.18.0.0", 15)
+                .addRoute("100.64.0.0", 10) // 确保全部 CGNAT FakeIP 流量无缝路由进 TUN 网卡
                 .addAddress(TUN_ADDRESS_V6, TUN_PREFIX_V6)
                 .addRoute("::", 0)
                 .setMtu(TUN_MTU)

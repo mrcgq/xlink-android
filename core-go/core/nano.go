@@ -81,7 +81,6 @@ func connectNanoTunnel(target string, outboundTag string, payload []byte) (*webs
 
 	emitLog(logLevel, logMsg)
 
-	// 传入指定 IP 和回源 IP
 	wsConn, err := dialCleanWebSocket(targetServer, settings.ServerIP, fallback, secretKey)
 	if err != nil {
 		return nil, err
@@ -101,16 +100,11 @@ func makePreDialControl() func(network, address string, c syscall.RawConn) error
 		return nil
 	}
 	return func(network, address string, c syscall.RawConn) error {
-		var protectErr error
-		ctrlErr := c.Control(func(fd uintptr) {
-			if !pf.Protect(int(fd)) {
-				protectErr = fmt.Errorf("VpnService.protect(fd=%d) 返回 false", fd)
-			}
+		_ = c.Control(func(fd uintptr) {
+			// 尝试 protect，即使部分国产 ROM 返回 false 也不中断拨号，因为系统级已排除本应用
+			_ = pf.Protect(int(fd))
 		})
-		if ctrlErr != nil {
-			return ctrlErr
-		}
-		return protectErr
+		return nil
 	}
 }
 
@@ -157,7 +151,6 @@ func dialCleanWebSocket(serverAddr, serverIP, fallbackAddr, token string) (*webs
 		}
 	}
 
-	// 智能兼容指定 IP 里带端口的情况 (如 104.16.1.1:443)
 	if strings.Contains(realIP, ":") && !strings.HasPrefix(realIP, "[") {
 		if strings.Count(realIP, ":") == 1 {
 			h, p, err := net.SplitHostPort(realIP)
@@ -195,7 +188,7 @@ func dialCleanWebSocket(serverAddr, serverIP, fallbackAddr, token string) (*webs
 	conn, resp, err := dialer.Dial(wsURL, reqHeader)
 	if err != nil {
 		if resp != nil {
-			return nil, fmt.Errorf("HTTP %d (Worker 鉴权失败或拒绝)", resp.StatusCode)
+			return nil, fmt.Errorf("HTTP %d (Worker 拒绝)", resp.StatusCode)
 		}
 		return nil, err
 	}
