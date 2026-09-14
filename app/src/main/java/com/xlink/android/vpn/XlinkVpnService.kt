@@ -6,6 +6,7 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.VpnService
 import android.os.Build
 import android.os.IBinder
@@ -36,6 +37,7 @@ class XlinkVpnService : VpnService() {
         const val ACTION_STOP_NODE = "com.xlink.android.STOP_NODE"
         const val ACTION_START_ALL = "com.xlink.android.START_ALL"
         const val ACTION_STOP_ALL = "com.xlink.android.STOP_ALL"
+        const val ACTION_RESTART_TUN = "com.xlink.android.RESTART_TUN"
         const val EXTRA_NODE_ID = "node_id"
 
         const val NOTIFICATION_CHANNEL_ID = "xlink_vpn_channel"
@@ -85,6 +87,15 @@ class XlinkVpnService : VpnService() {
                 stopCurrentRunningLocked()
                 stopForeground(STOP_FOREGROUND_REMOVE)
                 stopSelf()
+            }
+            ACTION_RESTART_TUN -> {
+                // 热重载分应用代理规则
+                val currentId = activeNodeId
+                if (currentId != null) {
+                    serviceScope.launch {
+                        startSingleNode(currentId)
+                    }
+                }
             }
             else -> serviceScope.launch {
                 if (!VpnStateHolder.isAnyRunning() && activeNodeId == null) {
@@ -136,12 +147,16 @@ class XlinkVpnService : VpnService() {
 
     private suspend fun startSingleNode(nodeId: String) {
         withContext(Dispatchers.IO) {
-            if (activeNodeId == nodeId && VpnStateHolder.isRunning(nodeId)) return@withContext
-
             val nodes = nodeStore.loadOnce()
             val node = nodes.firstOrNull { it.id == nodeId } ?: return@withContext
 
-            if (activeNodeId != null) stopCurrentRunningLocked()
+            if (activeNodeId != null) {
+                // 如果是热重载，先平滑释放旧网卡
+                try { tunManager?.stopSync() } catch (_: Exception) {}
+                tunManager = null
+                try { tunPfd?.close() } catch (_: Exception) {}
+                tunPfd = null
+            }
             VpnStateHolder.setStarting(nodeId, node.name)
 
             try {
@@ -207,16 +222,27 @@ class XlinkVpnService : VpnService() {
                 .setMtu(TUN_MTU)
                 .setBlocking(false)
                 .setSession("Xlink Odyssey")
-                .addDisallowedApplication(packageName)
 
-            // 分应用代理控制
-            if (AppFilterManager.isEnabled(applicationContext)) {
-                val selectedApps = AppFilterManager.getSelectedApps(applicationContext)
-                if (selectedApps.isNotEmpty()) {
-                    for (pkg in selectedApps) {
-                        try { builder.addAllowedApplication(pkg) } catch (_: Exception) {}
-                    }
+            // ★ 核心修复：彻底遵守 Android 规范，绝不黑白名单混用！
+            val isPerAppEnabled = AppFilterManager.isEnabled(applicationContext)
+            val selectedApps = AppFilterManager.getSelectedApps(applicationContext)
+
+            if (isPerAppEnabled && selectedApps.isNotEmpty()) {
+                // 1. 白名单模式：只允许勾选的 App 进 TUN 网卡
+                // 未加入的 App（以及 Xlink 自身）自动走物理外网，绝不冲突！
+                var addedCount = 0
+                for (pkg in selectedApps) {
+                    try {
+                        packageManager.getPackageInfo(pkg, 0)
+                        builder.addAllowedApplication(pkg)
+                        addedCount++
+                    } catch (_: PackageManager.NameNotFoundException) {}
                 }
+                Log.i(TAG, "已生效分应用白名单模式，代理应用数量: $addedCount")
+            } else {
+                // 2. 全局模式：仅排除 Xlink 自身防回环，其余 App 全部代理
+                builder.addDisallowedApplication(packageName)
+                Log.i(TAG, "已生效全局代理模式")
             }
 
             builder.establish()

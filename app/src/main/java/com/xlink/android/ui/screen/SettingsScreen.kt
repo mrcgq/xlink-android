@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.Intent
 import android.os.Build
 import android.provider.Settings
+import android.widget.Toast
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -27,6 +28,8 @@ import com.xlink.android.R
 import com.xlink.android.util.AppFilterManager
 import com.xlink.android.util.AutoStartManager
 import com.xlink.android.util.InstalledAppItem
+import com.xlink.android.vpn.VpnStateHolder
+import com.xlink.android.vpn.XlinkVpnService
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -64,11 +67,20 @@ fun SettingsScreen(
             SettingsSwitchItem(
                 icon = Icons.Filled.Apps,
                 title = "分应用代理 (推荐)",
-                subtitle = if (perAppProxyEnabled) "已开启 (仅代理选中的 $selectedAppsCount 个应用，国内App直连)" else "未开启 (全局所有应用走代理)",
+                subtitle = if (perAppProxyEnabled) "已开启 (仅代理选中的 $selectedAppsCount 个应用，其余国内App直连)" else "未开启 (全局所有应用走代理)",
                 checked = perAppProxyEnabled,
                 onCheckedChange = { enabled ->
                     AppFilterManager.setEnabled(context, enabled)
                     perAppProxyEnabled = enabled
+
+                    // 若 VPN 正在运行，自动平滑重启 TUN 网卡让新规则即刻生效！
+                    if (VpnStateHolder.isAnyRunning()) {
+                        val restartIntent = Intent(context, XlinkVpnService::class.java).apply {
+                            action = XlinkVpnService.ACTION_RESTART_TUN
+                        }
+                        context.startService(restartIntent)
+                        Toast.makeText(context, "规则已更新，VPN 网卡已自动热重载！", Toast.LENGTH_SHORT).show()
+                    }
                 }
             )
 
@@ -130,6 +142,15 @@ fun SettingsScreen(
             onDismiss = {
                 showAppPicker = false
                 selectedAppsCount = AppFilterManager.getSelectedApps(context).size
+
+                // 如果修改了 App 勾选且 VPN 正在运行，触发热重载
+                if (VpnStateHolder.isAnyRunning()) {
+                    val restartIntent = Intent(context, XlinkVpnService::class.java).apply {
+                        action = XlinkVpnService.ACTION_RESTART_TUN
+                    }
+                    context.startService(restartIntent)
+                    Toast.makeText(context, "代理应用列表已更新，VPN 网卡已热重载！", Toast.LENGTH_SHORT).show()
+                }
             }
         )
     }
