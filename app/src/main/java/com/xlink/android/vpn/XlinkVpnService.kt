@@ -61,6 +61,8 @@ class XlinkVpnService : VpnService() {
     @Volatile
     private var activeNodeId: String? = null
 
+    private val startLock = kotlinx.coroutines.sync.Mutex()
+
     override fun onCreate() {
         super.onCreate()
         nodeStore = NodeStore(applicationContext)
@@ -146,51 +148,56 @@ class XlinkVpnService : VpnService() {
     }
 
     private suspend fun startSingleNode(nodeId: String) {
-        withContext(Dispatchers.IO) {
-            val nodes = nodeStore.loadOnce()
-            val node = nodes.firstOrNull { it.id == nodeId } ?: return@withContext
+        startLock.lock()
+        try {
+            withContext(Dispatchers.IO) {
+                val nodes = nodeStore.loadOnce()
+                val node = nodes.firstOrNull { it.id == nodeId } ?: return@withContext
 
-            if (activeNodeId != null) {
-                // 如果是热重载，先平滑释放旧网卡
-                try { tunManager?.stopSync() } catch (_: Exception) {}
-                tunManager = null
-                try { tunPfd?.close() } catch (_: Exception) {}
-                tunPfd = null
-            }
-            VpnStateHolder.setStarting(nodeId, node.name)
-
-            try {
-                val (configuredHost, configuredPort) = NodeConfig.parseListenAddr(node.listen)
-                val socksPort = PortFinder.findFree(configuredPort)
-                val listenAddr = "$configuredHost:$socksPort"
-
-                val coreResult = CoreEngine.startNode(node, listenAddr)
-                if (coreResult.isFailure) {
-                    throw coreResult.exceptionOrNull() ?: IllegalStateException("Go 核心引擎启动失败")
+                if (activeNodeId != null) {
+                    // 如果是热重载，先平滑释放旧网卡
+                    try { tunManager?.stopSync() } catch (_: Exception) {}
+                    tunManager = null
+                    try { tunPfd?.close() } catch (_: Exception) {}
+                    tunPfd = null
                 }
+                VpnStateHolder.setStarting(nodeId, node.name)
 
-                VpnStateHolder.emitLog(nodeId, node.name, "正在创建 TUN 虚拟网卡...", LogLevel.INFO)
-                val pfd = establishTun() ?: throw IllegalStateException("TUN 虚拟网卡分配失败")
-                tunPfd = pfd
+                try {
+                    val (configuredHost, configuredPort) = NodeConfig.parseListenAddr(node.listen)
+                    val socksPort = PortFinder.findFree(configuredPort)
+                    val listenAddr = "$configuredHost:$socksPort"
 
-                val tm = TunManager(applicationContext)
-                tm.onError = { err ->
-                    VpnStateHolder.emitLog(nodeId, node.name, "[TUN 异常] $err", LogLevel.ERROR)
+                    val coreResult = CoreEngine.startNode(node, listenAddr)
+                    if (coreResult.isFailure) {
+                        throw coreResult.exceptionOrNull() ?: IllegalStateException("Go 核心引擎启动失败")
+                    }
+
+                    VpnStateHolder.emitLog(nodeId, node.name, "正在创建 TUN 虚拟网卡...", LogLevel.INFO)
+                    val pfd = establishTun() ?: throw IllegalStateException("TUN 虚拟网卡分配失败")
+                    tunPfd = pfd
+
+                    val tm = TunManager(applicationContext)
+                    tm.onError = { err ->
+                        VpnStateHolder.emitLog(nodeId, node.name, "[TUN 异常] $err", LogLevel.ERROR)
+                    }
+                    tm.start(pfd.fd, socksPort)
+                    tunManager = tm
+
+                    activeNodeId = nodeId
+                    VpnStateHolder.registerEngine(EngineHandle(nodeId = nodeId, tunStarted = true, internalPort = socksPort))
+                    VpnStateHolder.setRunning(nodeId, node.name, socksPort)
+                    updateNotification("Xlink 运行中 · 节点: ${node.name}")
+
+                } catch (e: Exception) {
+                    val errMsg = e.message ?: "未知异常"
+                    Log.e(TAG, "启动节点失败: $errMsg", e)
+                    VpnStateHolder.setError(nodeId, node.name, errMsg)
+                    stopCurrentRunningLocked()
                 }
-                tm.start(pfd.fd, socksPort)
-                tunManager = tm
-
-                activeNodeId = nodeId
-                VpnStateHolder.registerEngine(EngineHandle(nodeId = nodeId, tunStarted = true, internalPort = socksPort))
-                VpnStateHolder.setRunning(nodeId, node.name, socksPort)
-                updateNotification("Xlink 运行中 · 节点: ${node.name}")
-
-            } catch (e: Exception) {
-                val errMsg = e.message ?: "未知异常"
-                Log.e(TAG, "启动节点失败: $errMsg", e)
-                VpnStateHolder.setError(nodeId, node.name, errMsg)
-                stopCurrentRunningLocked()
             }
+        } finally {
+            startLock.unlock()
         }
     }
 

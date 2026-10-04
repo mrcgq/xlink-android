@@ -170,7 +170,7 @@ func dialCleanWebSocket(serverAddr, serverIP, fallbackAddr, token string) (*webs
 	reqHeader := http.Header{}
 	reqHeader.Add("Host", tlsHost)
 	reqHeader.Add("User-Agent", "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36")
-	reqHeader.Add("Authorization", "Bearer "+token)
+	reqHeader.Add("Authorization", "Bearer " + token)
 
 	netDialer := &net.Dialer{
 		Timeout: 8 * time.Second,
@@ -178,7 +178,7 @@ func dialCleanWebSocket(serverAddr, serverIP, fallbackAddr, token string) (*webs
 	}
 
 	dialer := websocket.Dialer{
-		TLSClientConfig:  &tls.Config{InsecureSkipVerify: true, ServerName: tlsHost},
+		TLSClientConfig:  &tls.Config{InsecureSkipVerify: false, ServerName: tlsHost},
 		HandshakeTimeout: 10 * time.Second,
 		NetDial: func(network, addr string) (net.Conn, error) {
 			return netDialer.Dial(network, net.JoinHostPort(realIP, realPort))

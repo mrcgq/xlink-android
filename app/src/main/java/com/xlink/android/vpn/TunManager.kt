@@ -72,7 +72,7 @@ class TunManager(private val context: Context) {
 
     private fun createTProxyConfig(socks5Port: Int): File {
         val configFile = File(context.cacheDir, "tproxy.conf")
-        if (configFile.exists()) configFile.delete()
+        val tmpFile = File(context.cacheDir, "tproxy.conf.tmp")
 
         // 使用标准的 CGNAT 假 IP 掩码，确保 100% 能够反向还原出 google.com、youtube.com 域名
         // 同时移除 socks5.udp，让 QUIC 优雅回退至稳定高速的 TCP 协议
@@ -93,8 +93,12 @@ class TunManager(private val context: Context) {
               cache-size: 10000
         """.trimIndent()
 
-        FileOutputStream(configFile).use { fos ->
+        FileOutputStream(tmpFile).use { fos ->
             fos.write(configYaml.toByteArray(Charsets.UTF_8))
+            fos.fd.sync()
+        }
+        if (tmpFile.exists()) {
+            tmpFile.renameTo(configFile)
         }
         return configFile
     }

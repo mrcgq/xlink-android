@@ -32,12 +32,12 @@ jobs:
           fetch-depth: 0
           submodules: recursive
           
-      # ★ 让 GitHub Actions 全自动拉取 hev-socks5-tunnel C 源码，免去本地任何手动操作！
+      # ★ 让 GitHub Actions 全自动拉取 hev-socks5-tunnel 锁定稳定版 C 源码
       - name: Auto-fetch hev-socks5-tunnel C Source
         run: |
-          echo "🚀 正在自动拉取 hev-socks5-tunnel 官方 C 源码..."
+          echo "🚀 正在拉取 hev-socks5-tunnel 稳定发行版 C 源码..."
           rm -rf app/src/main/jni/hev-socks5-tunnel
-          git clone --depth 1 --recursive https://github.com/heiher/hev-socks5-tunnel app/src/main/jni/hev-socks5-tunnel
+          git clone --depth 1 --branch 2.6.8 --recursive https://github.com/heiher/hev-socks5-tunnel app/src/main/jni/hev-socks5-tunnel
           echo "✅ C 源码拉取完成，准备编译！"
 
       - name: Setup Go

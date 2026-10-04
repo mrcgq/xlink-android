@@ -23,12 +23,13 @@ const RE_IPV4      = /^(\d{1,3}\.){3}\d{1,3}$/;
 const RE_V6_PORT   = /^\[([^\]]+)\](?::(\d+))?$/;
 const RE_PORT      = /^\d+$/;
 
-// ★ 核心修复：全面防御云厂商元数据劫持与内网嗅探
+// ★ 核心修复：全面防御云厂商元数据劫持与内网嗅探（含带括号的 IPv6 回环地址）
 const BLOCKED_HOSTS = new Set([
     'speed.cloudflare.com',
     'localhost',
     '127.0.0.1',
     '::1',
+    '[::1]',
     '169.254.169.254',
 ]);
 
