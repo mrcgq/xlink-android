@@ -50,7 +50,8 @@ func connectNanoTunnel(target string, outboundTag string, payload []byte) (*webs
 		if strings.Contains(target, rule.Keyword) {
 			targetServer = rule.Node
 			logLevel = "RULE"
-			logMsg = fmt.Sprintf("规则命中: %-20s → 节点: %s (关键词: %s)", target, targetServer, rule.Keyword)
+			logMsg = fmt.Sprintf("规则命中: %-20s → 节点: %s (关键词: %s)",
+				target, targetServer, rule.Keyword)
 			break
 		}
 	}
@@ -71,11 +72,13 @@ func connectNanoTunnel(target string, outboundTag string, payload []byte) (*webs
 				targetServer = settings.ServerPool[rand.Intn(int(poolLen))]
 			}
 			logLevel = "LB"
-			logMsg = fmt.Sprintf("负载均衡: %-25s → 节点: %s (策略: %s)", target, targetServer, strategy)
+			logMsg = fmt.Sprintf("负载均衡: %-25s → 节点: %s (策略: %s)",
+				target, targetServer, strategy)
 		} else {
 			targetServer = settings.Server
 			logLevel = "DIRECT"
-			logMsg = fmt.Sprintf("直连访问: %-25s → 节点: %s", target, targetServer)
+			logMsg = fmt.Sprintf("直连访问: %-25s → 节点: %s",
+				target, targetServer)
 		}
 	}
 
@@ -100,20 +103,26 @@ func makePreDialControl() func(network, address string, c syscall.RawConn) error
 		return nil
 	}
 	return func(network, address string, c syscall.RawConn) error {
-		_ = c.Control(func(fd uintptr) {
-			_ = pf.Protect(int(fd))
+		var protectErr error
+		ctrlErr := c.Control(func(fd uintptr) {
+			if !pf.Protect(int(fd)) {
+				protectErr = fmt.Errorf("VpnService.protect(fd=%d) 返回 false", fd)
+			}
 		})
-		return nil
+		if ctrlErr != nil {
+			return ctrlErr
+		}
+		return protectErr
 	}
 }
 
-// smartDialTCP 智能物理拨号器 (完美支持 cf.877774.xyz 优选域名、纯 IP、带端口域名，自动优先 IPv4 规避黑洞)
+// smartDialTCP 智能物理拨号器 (优先 IPv4 规避黑洞，完整支持 cf.877774.xyz 优选域名、纯 IP、带端口格式，并对 socket 执行 VPN protect)
 func smartDialTCP(targetHostOrIP, defaultPort string, timeout time.Duration) (net.Conn, error) {
 	target := strings.TrimSpace(targetHostOrIP)
 	host := target
 	port := defaultPort
 
-	// 1. 拆解 host 和 port
+	// 1. 拆解 host 和 port (支持 [2606::1]:443, 1.1.1.1:443, domain.com:443, domain.com)
 	if strings.HasPrefix(target, "[") {
 		if idx := strings.Index(target, "]"); idx != -1 {
 			host = target[1:idx]
@@ -136,17 +145,18 @@ func smartDialTCP(targetHostOrIP, defaultPort string, timeout time.Duration) (ne
 		Control: makePreDialControl(),
 	}
 
-	// 2. 如果本身就是 IP，直接连接
+	// 2. 如果本身就是 IP 地址，直接拨号（零 DNS 延迟）
 	if ip := net.ParseIP(host); ip != nil {
 		return dialer.Dial("tcp", net.JoinHostPort(host, port))
 	}
 
-	// 3. 如果是域名 (如 cf.877774.xyz)，进行系统级解析并优先使用 IPv4 避免黑洞
+	// 3. 如果是优选域名 (如 cf.877774.xyz)，进行系统 DNS 解析并强制 IPv4 优先
 	ips, err := net.LookupIP(host)
 	if err != nil || len(ips) == 0 {
 		return dialer.Dial("tcp", net.JoinHostPort(host, port))
 	}
 
+	// 排序：IPv4 绝对排在前面，过滤/后置在移动网络中易发生黑洞的 IPv6
 	var sortedIPs []net.IP
 	for _, ip := range ips {
 		if ip.To4() != nil {
@@ -159,6 +169,7 @@ func smartDialTCP(targetHostOrIP, defaultPort string, timeout time.Duration) (ne
 		}
 	}
 
+	// 依次尝试候选 IP (单节点 3.5s 快速探测)
 	var lastErr error
 	singleTimeout := 3500 * time.Millisecond
 	if singleTimeout > timeout {
@@ -184,10 +195,6 @@ func smartDialTCP(targetHostOrIP, defaultPort string, timeout time.Duration) (ne
 }
 
 func dialCleanWebSocket(serverAddr, serverIP, fallbackAddr, token string) (*websocket.Conn, error) {
-	var sniHost string
-	var realTarget string
-	var realPort string = "443"
-
 	cleanServerIP := strings.TrimSpace(serverIP)
 
 	parts := strings.SplitN(serverAddr, "#", 2)
@@ -195,44 +202,65 @@ func dialCleanWebSocket(serverAddr, serverIP, fallbackAddr, token string) (*webs
 		sni := strings.TrimSpace(parts[0])
 		realAddr := strings.TrimSpace(parts[1])
 
-		sh, sp, err := net.SplitHostPort(sni)
+		sniHost, sniPort, err := net.SplitHostPort(sni)
 		if err != nil {
 			sniHost = sni
-			realPort = "443"
-		} else {
-			sniHost = sh
-			realPort = sp
+			sniPort = "443"
 		}
 
+		realTarget := realAddr
 		if cleanServerIP != "" {
 			realTarget = cleanServerIP
-		} else {
-			realTarget = realAddr
 		}
-	} else {
-		host, port, _, _ := parseServerAddr(serverAddr)
-		sniHost = host
-		realPort = port
-		if cleanServerIP != "" {
-			realTarget = cleanServerIP
-		} else {
-			realTarget = host
+
+		wsURL := buildWsURL(sniHost, sniPort, token, fallbackAddr)
+		reqHeader := http.Header{}
+		reqHeader.Add("Host", sniHost)
+		reqHeader.Add("User-Agent", "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36")
+		reqHeader.Add("Authorization", "Bearer "+token)
+
+		dialer := websocket.Dialer{
+			TLSClientConfig:  &tls.Config{InsecureSkipVerify: true, ServerName: sniHost},
+			HandshakeTimeout: 10 * time.Second,
+			NetDial: func(network, addr string) (net.Conn, error) {
+				_, p, _ := net.SplitHostPort(addr)
+				return smartDialTCP(realTarget, p, 8*time.Second)
+			},
 		}
+
+		conn, resp, err := dialer.Dial(wsURL, reqHeader)
+		if err != nil {
+			if resp != nil {
+				return nil, fmt.Errorf("HTTP %d", resp.StatusCode)
+			}
+			return nil, err
+		}
+		return conn, nil
 	}
 
-	tlsHost := sniHost
+	host, port, path, _ := parseServerAddr(serverAddr)
+
+	tlsHost := host
 	if strings.HasPrefix(tlsHost, "[") && strings.HasSuffix(tlsHost, "]") {
 		tlsHost = tlsHost[1 : len(tlsHost)-1]
 	}
+	if strings.Contains(host, ":") && !strings.HasPrefix(host, "[") {
+		host = "[" + host + "]"
+	}
 
-	wsURL := buildWsURL(sniHost, realPort, token, fallbackAddr)
+	realTarget := host
+	if cleanServerIP != "" {
+		realTarget = cleanServerIP
+	}
+
+	wsURL := buildWsURL(host+path, port, token, fallbackAddr)
 	reqHeader := http.Header{}
 	reqHeader.Add("Host", tlsHost)
 	reqHeader.Add("User-Agent", "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36")
 	reqHeader.Add("Authorization", "Bearer "+token)
 
 	dialer := websocket.Dialer{
-		TLSClientConfig:  &tls.Config{InsecureSkipVerify: false, ServerName: tlsHost},
+		TLSClientConfig:  &tls.Config{InsecureSkipVerify: true, ServerName: tlsHost},
 		HandshakeTimeout: 10 * time.Second,
 		NetDial: func(network, addr string) (net.Conn, error) {
 			_, p, _ := net.SplitHostPort(addr)
@@ -243,7 +271,7 @@ func dialCleanWebSocket(serverAddr, serverIP, fallbackAddr, token string) (*webs
 	conn, resp, err := dialer.Dial(wsURL, reqHeader)
 	if err != nil {
 		if resp != nil {
-			return nil, fmt.Errorf("HTTP %d (Worker 拒绝)", resp.StatusCode)
+			return nil, fmt.Errorf("HTTP %d", resp.StatusCode)
 		}
 		return nil, err
 	}
@@ -293,7 +321,8 @@ func buildWsURL(hostWithPath, port, token, fallbackAddr string) string {
 		path = hostWithPath[idx:]
 		host = hostWithPath[:idx]
 	}
-	base := fmt.Sprintf("wss://%s:%s%s?token=%s", host, port, path, url.QueryEscape(token))
+	base := fmt.Sprintf("wss://%s:%s%s?token=%s",
+		host, port, path, url.QueryEscape(token))
 	if fallbackAddr != "" {
 		base += "&pyip=" + url.QueryEscape(fallbackAddr)
 	}
