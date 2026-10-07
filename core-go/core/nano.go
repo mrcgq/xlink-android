@@ -101,17 +101,92 @@ func makePreDialControl() func(network, address string, c syscall.RawConn) error
 	}
 	return func(network, address string, c syscall.RawConn) error {
 		_ = c.Control(func(fd uintptr) {
-			// 尝试 protect，即使部分国产 ROM 返回 false 也不中断拨号，因为系统级已排除本应用
 			_ = pf.Protect(int(fd))
 		})
 		return nil
 	}
 }
 
+// smartDialTCP 智能物理拨号器 (完美支持 cf.877774.xyz 优选域名、纯 IP、带端口域名，自动优先 IPv4 规避黑洞)
+func smartDialTCP(targetHostOrIP, defaultPort string, timeout time.Duration) (net.Conn, error) {
+	target := strings.TrimSpace(targetHostOrIP)
+	host := target
+	port := defaultPort
+
+	// 1. 拆解 host 和 port
+	if strings.HasPrefix(target, "[") {
+		if idx := strings.Index(target, "]"); idx != -1 {
+			host = target[1:idx]
+			rest := target[idx+1:]
+			if strings.HasPrefix(rest, ":") && len(rest) > 1 {
+				port = rest[1:]
+			}
+		}
+	} else if strings.Count(target, ":") == 1 {
+		if h, p, err := net.SplitHostPort(target); err == nil {
+			host = h
+			port = p
+		}
+	} else if strings.Count(target, ":") > 1 {
+		host = target
+	}
+
+	dialer := &net.Dialer{
+		Timeout: timeout,
+		Control: makePreDialControl(),
+	}
+
+	// 2. 如果本身就是 IP，直接连接
+	if ip := net.ParseIP(host); ip != nil {
+		return dialer.Dial("tcp", net.JoinHostPort(host, port))
+	}
+
+	// 3. 如果是域名 (如 cf.877774.xyz)，进行系统级解析并优先使用 IPv4 避免黑洞
+	ips, err := net.LookupIP(host)
+	if err != nil || len(ips) == 0 {
+		return dialer.Dial("tcp", net.JoinHostPort(host, port))
+	}
+
+	var sortedIPs []net.IP
+	for _, ip := range ips {
+		if ip.To4() != nil {
+			sortedIPs = append(sortedIPs, ip)
+		}
+	}
+	for _, ip := range ips {
+		if ip.To4() == nil {
+			sortedIPs = append(sortedIPs, ip)
+		}
+	}
+
+	var lastErr error
+	singleTimeout := 3500 * time.Millisecond
+	if singleTimeout > timeout {
+		singleTimeout = timeout
+	}
+
+	for _, ip := range sortedIPs {
+		singleDialer := &net.Dialer{
+			Timeout: singleTimeout,
+			Control: makePreDialControl(),
+		}
+		conn, err := singleDialer.Dial("tcp", net.JoinHostPort(ip.String(), port))
+		if err == nil {
+			return conn, nil
+		}
+		lastErr = err
+	}
+
+	if lastErr != nil {
+		return nil, lastErr
+	}
+	return dialer.Dial("tcp", net.JoinHostPort(host, port))
+}
+
 func dialCleanWebSocket(serverAddr, serverIP, fallbackAddr, token string) (*websocket.Conn, error) {
 	var sniHost string
-	var realIP string
-	var realPort string
+	var realTarget string
+	var realPort string = "443"
 
 	cleanServerIP := strings.TrimSpace(serverIP)
 
@@ -130,34 +205,18 @@ func dialCleanWebSocket(serverAddr, serverIP, fallbackAddr, token string) (*webs
 		}
 
 		if cleanServerIP != "" {
-			realIP = cleanServerIP
+			realTarget = cleanServerIP
 		} else {
-			rh, rp, err := net.SplitHostPort(realAddr)
-			if err != nil {
-				realIP = realAddr
-			} else {
-				realIP = rh
-				realPort = rp
-			}
+			realTarget = realAddr
 		}
 	} else {
 		host, port, _, _ := parseServerAddr(serverAddr)
 		sniHost = host
 		realPort = port
 		if cleanServerIP != "" {
-			realIP = cleanServerIP
+			realTarget = cleanServerIP
 		} else {
-			realIP = host
-		}
-	}
-
-	if strings.Contains(realIP, ":") && !strings.HasPrefix(realIP, "[") {
-		if strings.Count(realIP, ":") == 1 {
-			h, p, err := net.SplitHostPort(realIP)
-			if err == nil {
-				realIP = h
-				realPort = p
-			}
+			realTarget = host
 		}
 	}
 
@@ -170,18 +229,14 @@ func dialCleanWebSocket(serverAddr, serverIP, fallbackAddr, token string) (*webs
 	reqHeader := http.Header{}
 	reqHeader.Add("Host", tlsHost)
 	reqHeader.Add("User-Agent", "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36")
-	reqHeader.Add("Authorization", "Bearer " + token)
-
-	netDialer := &net.Dialer{
-		Timeout: 8 * time.Second,
-		Control: makePreDialControl(),
-	}
+	reqHeader.Add("Authorization", "Bearer "+token)
 
 	dialer := websocket.Dialer{
 		TLSClientConfig:  &tls.Config{InsecureSkipVerify: false, ServerName: tlsHost},
 		HandshakeTimeout: 10 * time.Second,
 		NetDial: func(network, addr string) (net.Conn, error) {
-			return netDialer.Dial(network, net.JoinHostPort(realIP, realPort))
+			_, p, _ := net.SplitHostPort(addr)
+			return smartDialTCP(realTarget, p, 8*time.Second)
 		},
 	}
 
