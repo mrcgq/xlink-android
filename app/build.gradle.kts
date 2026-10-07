@@ -25,7 +25,7 @@ android {
         externalNativeBuild {
             ndkBuild {
                 arguments(
-                    "APP_CFLAGS+=-DPKGNAME=com/xlink/android/vpn -DCLSNAME=TProxyService -ffile-prefix-map=${rootDir}=."
+                    "APP_CFLAGS+=-DPKGNAME=com_xlink_android_vpn -DCLSNAME=TProxyService -ffile-prefix-map=${rootDir}=."
                 )
                 arguments("APP_LDFLAGS+=-Wl,--build-id=none")
             }
