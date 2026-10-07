@@ -7,12 +7,14 @@ import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.content.pm.ServiceInfo
 import android.net.VpnService
 import android.os.Build
 import android.os.IBinder
 import android.os.ParcelFileDescriptor
 import android.util.Log
 import androidx.core.app.NotificationCompat
+import androidx.core.app.ServiceCompat
 import com.xlink.android.R
 import com.xlink.android.data.model.NodeConfig
 import com.xlink.android.data.store.NodeStore
@@ -45,8 +47,6 @@ class XlinkVpnService : VpnService() {
 
         private const val TUN_ADDRESS_V4 = "198.18.0.1"
         private const val TUN_PREFIX_V4 = 16
-        private const val TUN_ADDRESS_V6 = "fc00::1"
-        private const val TUN_PREFIX_V6 = 128
         private const val TUN_MTU = 1500
         private const val TUN_FAKEDNS_IP = "198.18.0.2"
     }
@@ -71,8 +71,21 @@ class XlinkVpnService : VpnService() {
         VpnStateHolder.resetAll()
     }
 
+    private fun safeStartForeground(notification: Notification) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            val type = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
+            } else {
+                0
+            }
+            ServiceCompat.startForeground(this, NOTIFICATION_ID, notification, type)
+        } else {
+            startForeground(NOTIFICATION_ID, notification)
+        }
+    }
+
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        startForeground(NOTIFICATION_ID, buildNotification("Xlink 正在连接..."))
+        safeStartForeground(buildNotification("Xlink 正在连接..."))
 
         when (intent?.action) {
             ACTION_START_NODE -> {
@@ -91,7 +104,6 @@ class XlinkVpnService : VpnService() {
                 stopSelf()
             }
             ACTION_RESTART_TUN -> {
-                // 热重载分应用代理规则
                 val currentId = activeNodeId
                 if (currentId != null) {
                     serviceScope.launch {
@@ -120,11 +132,11 @@ class XlinkVpnService : VpnService() {
     }
 
     override fun onDestroy() {
-        try { tunManager?.stopSync() } catch (_: Exception) {}
+        try { tunManager?.stopSync() } catch (_: Throwable) {}
         tunManager = null
-        try { tunPfd?.close() } catch (_: Exception) {}
+        try { tunPfd?.close() } catch (_: Throwable) {}
         tunPfd = null
-        try { CoreEngine.stopNode() } catch (_: Exception) {}
+        try { CoreEngine.stopNode() } catch (_: Throwable) {}
         activeNodeId = null
         stopForeground(STOP_FOREGROUND_REMOVE)
         VpnStateHolder.resetAll()
@@ -155,10 +167,9 @@ class XlinkVpnService : VpnService() {
                 val node = nodes.firstOrNull { it.id == nodeId } ?: return@withContext
 
                 if (activeNodeId != null) {
-                    // 如果是热重载，先平滑释放旧网卡
-                    try { tunManager?.stopSync() } catch (_: Exception) {}
+                    try { tunManager?.stopSync() } catch (_: Throwable) {}
                     tunManager = null
-                    try { tunPfd?.close() } catch (_: Exception) {}
+                    try { tunPfd?.close() } catch (_: Throwable) {}
                     tunPfd = null
                 }
                 VpnStateHolder.setStarting(nodeId, node.name)
@@ -189,9 +200,9 @@ class XlinkVpnService : VpnService() {
                     VpnStateHolder.setRunning(nodeId, node.name, socksPort)
                     updateNotification("Xlink 运行中 · 节点: ${node.name}")
 
-                } catch (e: Exception) {
-                    val errMsg = e.message ?: "未知异常"
-                    Log.e(TAG, "启动节点失败: $errMsg", e)
+                } catch (t: Throwable) {
+                    val errMsg = t.message ?: "未知异常"
+                    Log.e(TAG, "启动节点失败: $errMsg", t)
                     VpnStateHolder.setError(nodeId, node.name, errMsg)
                     stopCurrentRunningLocked()
                 }
@@ -206,11 +217,11 @@ class XlinkVpnService : VpnService() {
         if (runningId != null) {
             VpnStateHolder.emitLog(runningId, "Xlink", "正在关闭连接...", LogLevel.INFO)
         }
-        try { tunManager?.stopSync() } catch (_: Exception) {}
+        try { tunManager?.stopSync() } catch (_: Throwable) {}
         tunManager = null
-        try { tunPfd?.close() } catch (_: Exception) {}
+        try { tunPfd?.close() } catch (_: Throwable) {}
         tunPfd = null
-        try { CoreEngine.stopNode() } catch (_: Exception) {}
+        try { CoreEngine.stopNode() } catch (_: Throwable) {}
         if (runningId != null) {
             VpnStateHolder.setStopped(runningId, "")
             activeNodeId = null
@@ -224,19 +235,20 @@ class XlinkVpnService : VpnService() {
                 .addRoute("0.0.0.0", 0)
                 .addDnsServer(TUN_FAKEDNS_IP)
                 .addRoute("100.64.0.0", 10)
-                .addAddress(TUN_ADDRESS_V6, TUN_PREFIX_V6)
-                .addRoute("::", 0)
                 .setMtu(TUN_MTU)
                 .setBlocking(false)
                 .setSession("Xlink Odyssey")
 
-            // ★ 核心修复：彻底遵守 Android 规范，绝不黑白名单混用！
+            // 安全尝试配置 IPv6，如果设备不支持则优雅跳过，防止抛异常闪退
+            try {
+                builder.addAddress("fd00::1", 64)
+                builder.addRoute("::", 0)
+            } catch (_: Throwable) {}
+
             val isPerAppEnabled = AppFilterManager.isEnabled(applicationContext)
             val selectedApps = AppFilterManager.getSelectedApps(applicationContext)
 
             if (isPerAppEnabled && selectedApps.isNotEmpty()) {
-                // 1. 白名单模式：只允许勾选的 App 进 TUN 网卡
-                // 未加入的 App（以及 Xlink 自身）自动走物理外网，绝不冲突！
                 var addedCount = 0
                 for (pkg in selectedApps) {
                     try {
@@ -247,14 +259,13 @@ class XlinkVpnService : VpnService() {
                 }
                 Log.i(TAG, "已生效分应用白名单模式，代理应用数量: $addedCount")
             } else {
-                // 2. 全局模式：仅排除 Xlink 自身防回环，其余 App 全部代理
                 builder.addDisallowedApplication(packageName)
                 Log.i(TAG, "已生效全局代理模式")
             }
 
             builder.establish()
-        } catch (e: Exception) {
-            Log.e(TAG, "establishTun 失败: ${e.message}", e)
+        } catch (t: Throwable) {
+            Log.e(TAG, "establishTun 失败: ${t.message}", t)
             null
         }
     }
