@@ -3,14 +3,8 @@ package core
 import (
 	"encoding/json"
 	"net"
-	"os"
 	"sync"
 )
-
-func init() {
-	// 强制纯 Go DNS 解析器，规避 Android CGO 死循环
-	os.Setenv("GODEBUG", "netdns=go")
-}
 
 var (
 	globalMutex     sync.Mutex
@@ -78,7 +72,7 @@ func getRoutingMap() []rule {
 	return currentRouting
 }
 
-// emitLog 确保在锁彻底释放后安全发射日志，两头兼顾且绝不死锁
+// emitLog 确保在锁释放后安全发射日志
 func emitLog(level, msg string) {
 	globalMutex.Lock()
 	cb := globalLogCb
@@ -90,7 +84,6 @@ func emitLog(level, msg string) {
 	}
 }
 
-// 兼容别名
 func emitLogSafe(level, msg string) {
 	emitLog(level, msg)
 }
@@ -102,7 +95,6 @@ func Start(configJSON string) string {
 		return errStr
 	}
 
-	// 锁在 startInternal 内部已经彻底释放，此处发射日志绝不死锁
 	emitLog("SYSTEM", "SOCKS5 引擎已成功监听: "+listenAddr)
 	return ""
 }
@@ -179,7 +171,7 @@ func handleIncoming(conn net.Conn) {
 	}
 	defer wsConn.Close()
 
-	// 3. 回复 SOCKS5 成功响应包，彻底打通隧道
+	// 3. 回复 SOCKS5 成功响应包
 	if err := sendSocks5SuccessResponse(conn); err != nil {
 		emitLog("ERROR", "回复 SOCKS5 响应失败: "+err.Error())
 		return
